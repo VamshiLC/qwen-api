@@ -159,8 +159,6 @@ async def web_ui():
       <label>Categories</label>
       <select id="categories">
         <option value="all">All categories</option>
-        <option value="abandoned_vehicle">Abandoned Vehicle</option>
-        <option value="unsheltered_encampment">Unsheltered Encampment</option>
       </select>
     </div>
     <div class="field">
@@ -199,6 +197,17 @@ function setFile(f) {
   reader.onload = (e) => { imgDataUrl = e.target.result; uploadArea.innerHTML = '<img src="'+e.target.result+'">'; };
   reader.readAsDataURL(f);
 }
+
+// Load categories from API
+fetch('/categories').then(r=>r.json()).then(data=>{
+  const sel = document.getElementById('categories');
+  data.categories.forEach(cat => {
+    const opt = document.createElement('option');
+    opt.value = cat;
+    opt.textContent = cat.replace(/_/g, ' ').replace(/\\b\\w/g, c=>c.toUpperCase());
+    sel.appendChild(opt);
+  });
+});
 
 const COLORS = { abandoned_vehicle: '#FF4444', unsheltered_encampment: '#FF8800' };
 
