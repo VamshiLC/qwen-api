@@ -20,6 +20,7 @@ CONFIDENCE_THRESHOLD = 0.2
 CATEGORIES = [
     "abandoned_vehicle",
     "unsheltered_encampment",
+    "trash_can",
 ]
 
 CATEGORY_PROMPTS = {
@@ -77,6 +78,38 @@ DO NOT DETECT as encampments:
 CRITICAL: If you don't see tents or tarps, DO NOT DETECT!
 
 Output: [{"category": "unsheltered_encampment", "bbox": [x1,y1,x2,y2], "confidence": 0.75, "description": "tent under bridge" or "tarp shelter"}]
+If none found, return: []""",
+
+    "trash_can": """Find ALL trash cans, waste bins, and garbage receptacles in this image.
+
+WHAT TO DETECT - actual trash cans and waste bins:
+- Public trash cans / waste bins on sidewalks or streets
+- Dumpsters (large metal waste containers)
+- Recycling bins (blue/green bins)
+- Overflowing garbage cans with trash spilling out
+- Knocked over or damaged trash cans on the street
+- City-provided waste bins (black, green, blue residential bins)
+
+WHERE trash cans are found:
+- Sidewalks and street corners
+- Near bus stops and benches
+- Outside buildings and storefronts
+- Residential streets (curbside bins)
+- Parks and public areas
+
+DO NOT DETECT as trash cans:
+- Piles of loose trash or debris on the ground (that's dumped_trash, not a bin)
+- Plastic bags of garbage without a container
+- Mailboxes, newspaper boxes, or utility boxes
+- Fire hydrants, bollards, or posts
+- Planters or flower pots
+- Random objects that are NOT containers for waste
+- Shopping carts
+- Cardboard boxes
+
+CRITICAL: Must be an actual CONTAINER designed to hold waste. Not loose trash.
+
+Output: [{"category": "trash_can", "bbox": [x1,y1,x2,y2], "confidence": 0.75, "description": "public trash bin on sidewalk"}]
 If none found, return: []""",
 }
 
