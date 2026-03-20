@@ -1,47 +1,83 @@
 """
-FastAPI server for Qwen 3.5 VLM Detection API
+Qwen 3.5 VLM Detection API — single process with embedded vLLM engine.
 
-Endpoints:
-    POST /detect         - Detect objects in a single image
-    POST /detect/batch   - Detect objects in a batch of images
-    GET  /health         - Health check (vLLM + API status)
-    GET  /categories     - List available detection categories
+No separate vLLM server needed. Model loads on startup, serves on port 8000.
+
+Usage:
+    python main.py
 """
 
 import base64
 import logging
 import time
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from vllm import LLM
 
-from config import CATEGORIES, CONFIDENCE_THRESHOLD
+from config import (
+    CATEGORIES,
+    CONFIDENCE_THRESHOLD,
+    MODEL_NAME,
+    GPU_MEMORY_UTILIZATION,
+    MAX_MODEL_LEN,
+    TENSOR_PARALLEL_SIZE,
+    QUANTIZATION,
+    PORT,
+)
 from detector import QwenDetector
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Global detector — initialized on startup
+detector: QwenDetector | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load vLLM engine on startup, cleanup on shutdown."""
+    global detector
+    logger.info("Loading model: %s", MODEL_NAME)
+    logger.info("GPU memory utilization: %s", GPU_MEMORY_UTILIZATION)
+
+    engine = LLM(
+        model=MODEL_NAME,
+        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
+        gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
+        max_model_len=MAX_MODEL_LEN,
+        quantization=QUANTIZATION,
+        trust_remote_code=True,
+        enable_chunked_prefill=True,
+        max_num_batched_tokens=MAX_MODEL_LEN,
+    )
+
+    detector = QwenDetector(engine)
+    logger.info("Model loaded, API ready on port %d", PORT)
+
+    yield
+
+    logger.info("Shutting down")
+
+
 app = FastAPI(
     title="Ash Qwen VLM Detection API",
-    description="Qwen 3.5 based object detection for abandoned vehicles and encampments",
-    version="1.0.0",
+    description="Qwen 3.5 VLM detection — single process, embedded vLLM engine",
+    version="2.0.0",
+    lifespan=lifespan,
 )
-
-# Initialize detector
-detector = QwenDetector()
 
 
 # --- Request/Response Models ---
 
 class DetectRequest(BaseModel):
-    """Single image detection request."""
-    image: str  # base64 encoded image
+    image: str
     categories: list[str] | None = None
     confidence_threshold: float | None = None
 
 class BatchDetectRequest(BaseModel):
-    """Batch image detection request."""
-    images: list[str]  # list of base64 encoded images
+    images: list[str]
     categories: list[str] | None = None
     confidence_threshold: float | None = None
 
@@ -61,36 +97,28 @@ class BatchDetectResponse(BaseModel):
     total_detections: int
     inference_time_ms: float
 
-class HealthResponse(BaseModel):
-    status: str
-    vllm_connected: bool
-
 
 # --- Endpoints ---
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health")
 async def health():
-    """Check API and vLLM server health."""
-    vllm_ok = detector.health_check()
-    return HealthResponse(
-        status="ok" if vllm_ok else "degraded",
-        vllm_connected=vllm_ok,
-    )
+    return {
+        "status": "healthy" if detector else "loading",
+        "model": MODEL_NAME,
+        "engine": "vllm_embedded",
+    }
 
 
 @app.get("/categories")
 async def list_categories():
-    """List available detection categories."""
     return {"categories": CATEGORIES}
 
 
 @app.post("/detect", response_model=DetectResponse)
 async def detect(request: DetectRequest):
-    """
-    Detect objects in a single image.
+    if not detector:
+        raise HTTPException(status_code=503, detail="Model still loading")
 
-    Send base64-encoded JPEG image + optional category filter.
-    """
     start = time.time()
 
     try:
@@ -105,7 +133,6 @@ async def detect(request: DetectRequest):
 
     detections = detector.detect_single(image_bytes, categories)
 
-    # Apply custom threshold if provided
     threshold = request.confidence_threshold or CONFIDENCE_THRESHOLD
     detections = [d for d in detections if d["confidence"] >= threshold]
 
@@ -117,42 +144,11 @@ async def detect(request: DetectRequest):
     )
 
 
-@app.post("/detect/upload", response_model=DetectResponse)
-async def detect_upload(
-    file: UploadFile = File(...),
-    categories: str | None = None,
-):
-    """
-    Detect objects in an uploaded image file.
-
-    Upload a JPEG/PNG file directly.
-    """
-    start = time.time()
-
-    image_bytes = await file.read()
-    cat_list = categories.split(",") if categories else CATEGORIES
-
-    for cat in cat_list:
-        if cat not in CATEGORIES:
-            raise HTTPException(status_code=400, detail=f"Unknown category: {cat}")
-
-    detections = detector.detect_single(image_bytes, cat_list)
-    elapsed_ms = (time.time() - start) * 1000
-
-    return DetectResponse(
-        detections=detections,
-        inference_time_ms=round(elapsed_ms, 1),
-    )
-
-
 @app.post("/detect/batch", response_model=BatchDetectResponse)
 async def detect_batch(request: BatchDetectRequest):
-    """
-    Detect objects in a batch of images.
+    if not detector:
+        raise HTTPException(status_code=503, detail="Model still loading")
 
-    Send list of base64-encoded JPEG images + optional category filter.
-    Recommended batch size: 8-16 images.
-    """
     start = time.time()
 
     if len(request.images) > 32:
@@ -170,7 +166,6 @@ async def detect_batch(request: BatchDetectRequest):
 
     results = detector.detect_batch(images_bytes, categories)
 
-    # Apply custom threshold if provided
     threshold = request.confidence_threshold or CONFIDENCE_THRESHOLD
     for result in results:
         result["detections"] = [
@@ -190,4 +185,4 @@ async def detect_batch(request: BatchDetectRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=PORT)

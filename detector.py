@@ -1,5 +1,5 @@
 """
-Qwen 3.5 VLM detector using vLLM OpenAI-compatible API
+Qwen 3.5 VLM detector using embedded vLLM engine (single process).
 """
 
 import base64
@@ -8,29 +8,20 @@ import logging
 import re
 from typing import Any
 
-from openai import OpenAI
+from vllm import SamplingParams
+from vllm.multimodal.utils import encode_image_base64
 
 from config import (
     CATEGORY_PROMPTS,
     CONFIDENCE_THRESHOLD,
-    SAMPLING_PARAMS,
-    VLLM_API_KEY,
-    VLLM_BASE_URL,
-    VLLM_MODEL,
+    SAMPLING_PARAMS as SAMPLING_CONF,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _encode_image(image_bytes: bytes) -> str:
-    """Encode image bytes to base64 data URI."""
-    return f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode()}"
-
-
 def _parse_detections(text: str, category: str) -> list[dict[str, Any]]:
     """Parse JSON detections from Qwen response text."""
-    # Try to find JSON array in response
-    # Look for [...] pattern
     match = re.search(r'\[.*\]', text, re.DOTALL)
     if not match:
         return []
@@ -48,7 +39,7 @@ def _parse_detections(text: str, category: str) -> list[dict[str, Any]]:
     for det in detections:
         if not isinstance(det, dict):
             continue
-        bbox = det.get("bbox")
+        bbox = det.get("bbox") or det.get("bbox_2d")
         confidence = det.get("confidence", 0.0)
         if (
             bbox
@@ -66,44 +57,30 @@ def _parse_detections(text: str, category: str) -> list[dict[str, Any]]:
 
 
 class QwenDetector:
-    """Qwen 3.5 VLM detector that calls vLLM server."""
+    """Qwen 3.5 VLM detector with embedded vLLM engine."""
 
-    def __init__(self, base_url: str = None, model: str = None):
-        self.client = OpenAI(
-            base_url=base_url or VLLM_BASE_URL,
-            api_key=VLLM_API_KEY,
+    def __init__(self, engine):
+        self.engine = engine
+        self.sampling_params = SamplingParams(
+            temperature=SAMPLING_CONF["temperature"],
+            top_p=SAMPLING_CONF["top_p"],
+            max_tokens=SAMPLING_CONF["max_tokens"],
+            presence_penalty=SAMPLING_CONF["presence_penalty"],
+            top_k=SAMPLING_CONF["top_k"],
         )
-        self.model = model or VLLM_MODEL
-
-    def health_check(self) -> bool:
-        """Check if vLLM server is reachable."""
-        try:
-            self.client.models.list()
-            return True
-        except Exception as e:
-            logger.error("vLLM health check failed: %s", e)
-            return False
 
     def detect_single(
         self,
         image_bytes: bytes,
-        categories: list[str] = None,
+        categories: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """
-        Run detection on a single image for specified categories.
-
-        Args:
-            image_bytes: JPEG image bytes
-            categories: List of categories to detect. Defaults to all.
-
-        Returns:
-            List of detections with category, bbox, confidence, description.
-        """
+        """Run detection on a single image for specified categories."""
         if categories is None:
             categories = list(CATEGORY_PROMPTS.keys())
 
         all_detections = []
-        image_uri = _encode_image(image_bytes)
+        image_b64 = base64.b64encode(image_bytes).decode()
+        image_uri = f"data:image/jpeg;base64,{image_b64}"
 
         for category in categories:
             prompt = CATEGORY_PROMPTS.get(category)
@@ -112,27 +89,22 @@ class QwenDetector:
                 continue
 
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": image_uri},
-                                },
-                                {
-                                    "type": "text",
-                                    "text": prompt,
-                                },
-                            ],
-                        }
-                    ],
-                    **SAMPLING_PARAMS,
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": image_uri}},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ]
+
+                outputs = self.engine.chat(
+                    messages=messages,
+                    sampling_params=self.sampling_params,
                 )
 
-                text = response.choices[0].message.content
+                text = outputs[0].outputs[0].text
                 detections = _parse_detections(text, category)
                 all_detections.extend(detections)
 
@@ -145,18 +117,9 @@ class QwenDetector:
     def detect_batch(
         self,
         images: list[bytes],
-        categories: list[str] = None,
+        categories: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """
-        Run detection on a batch of images.
-
-        Args:
-            images: List of JPEG image bytes
-            categories: Categories to detect. Defaults to all.
-
-        Returns:
-            List of results per image with index and detections.
-        """
+        """Run detection on a batch of images."""
         results = []
         for idx, image_bytes in enumerate(images):
             detections = self.detect_single(image_bytes, categories)

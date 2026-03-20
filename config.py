@@ -2,21 +2,26 @@
 Configuration for Qwen 3.5 VLM Detection API
 """
 
-# vLLM server settings
-VLLM_BASE_URL = "http://localhost:8000/v1"
-VLLM_MODEL = "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4"
-VLLM_API_KEY = "EMPTY"
+import os
 
-# Detection confidence threshold
+# Model
+MODEL_NAME = os.getenv("QWEN_MODEL", "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4")
+GPU_MEMORY_UTILIZATION = float(os.getenv("GPU_MEMORY_UTIL", "0.95"))
+MAX_MODEL_LEN = int(os.getenv("MAX_MODEL_LEN", "4096"))
+TENSOR_PARALLEL_SIZE = int(os.getenv("TENSOR_PARALLEL_SIZE", "1"))
+QUANTIZATION = os.getenv("QUANTIZATION", "moe_wna16")
+
+# Server
+PORT = int(os.getenv("PORT", "8000"))
+
+# Detection
 CONFIDENCE_THRESHOLD = 0.2
 
-# Qwen categories
 CATEGORIES = [
     "abandoned_vehicle",
     "unsheltered_encampment",
 ]
 
-# Per-category detection prompts
 CATEGORY_PROMPTS = {
     "abandoned_vehicle": """Find ALL abandoned vehicles in this image. Look carefully at every vehicle.
 
@@ -75,14 +80,11 @@ Output: [{"category": "unsheltered_encampment", "bbox": [x1,y1,x2,y2], "confiden
 If none found, return: []""",
 }
 
-# Sampling parameters for Qwen 3.5 (non-thinking mode for detection)
+# Sampling parameters
 SAMPLING_PARAMS = {
     "temperature": 0.7,
     "top_p": 0.8,
-    "max_tokens": 4096,
+    "max_tokens": 512,
     "presence_penalty": 1.5,
-    "extra_body": {
-        "top_k": 20,
-        "chat_template_kwargs": {"enable_thinking": False},
-    },
+    "top_k": 20,
 }

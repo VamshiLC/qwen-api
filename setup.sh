@@ -1,6 +1,6 @@
 #!/bin/bash
-# Setup script for ash-qwen-vllm VM
-# Run this after SSH-ing into the VM
+# Setup script for Qwen VLM API
+# Run on the GPU instance (L40S/A10G)
 
 set -e
 
@@ -24,19 +24,10 @@ echo ""
 echo "============================================"
 echo "Setup complete!"
 echo ""
-echo "To start vLLM server (Terminal 1):"
-echo "  source ~/qwen-env/bin/activate"
-echo "  vllm serve Qwen/Qwen3.5-35B-A3B-GPTQ-Int4 \\"
-echo "    --port 8000 \\"
-echo "    --tensor-parallel-size 1 \\"
-echo "    --max-model-len 4096 \\"
-echo "    --quantization moe_wna16 \\"
-echo "    --gpu-memory-utilization 0.95"
-echo ""
-echo "To start FastAPI server (Terminal 2):"
+echo "To start the API (single process):"
 echo "  source ~/qwen-env/bin/activate"
 echo "  python main.py"
 echo ""
-echo "Test health:"
-echo "  curl http://localhost:8001/health"
+echo "Test:"
+echo "  curl http://localhost:8000/health"
 echo "============================================"
